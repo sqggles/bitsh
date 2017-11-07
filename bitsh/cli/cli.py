@@ -105,11 +105,15 @@ def dumpdb(dburl, schema, tblname, parquet, sqlite, feather, csv, tsv):
         if tsv:
             odo(tbl, '%s.tsv' % (ofpfx))
         if parquet:
-            import fastparquet
-            df.to_parquet('%s.parquet' % (ofpfx))
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, '%s.parquet' % ofpfx)
         if feather:
-            import feather as ft
-            feather.write_dataframe('%s.feather' % (ofpfx))
+            import pyarrow as pa
+            import pyarrow.feather as pf
+
+            pf.write_feather(df, '%s.feather' % (ofpfx))
 
 
 cli.add_command(hello_world)
