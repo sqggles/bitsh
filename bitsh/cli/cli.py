@@ -1,13 +1,13 @@
 """Define the top-level cli command."""
 import os
-
+import json
 import click
 from pbr import version
 
 import pandas as pd
 import sqlalchemy as sa
 import blaze as bz
-import odo
+from odo import odo
 import logging
 
 from bitsh.cli.base import AbstractCommand
@@ -53,7 +53,8 @@ def hello_world():
     click.echo('Hello World!')
 
 
-@click.option('-d','--dburl', help='sqlalchemy url for the database')
+@click.option('-u','--dburl', envvar='DATABASE_URL',
+              help='sqlalchemy url for the database')
 @click.option('-s','--schema', default=None, help='schema to use')
 @click.option('-t','--tblname', help='table name to dump')
 @click.option('-p','--parquet', help='output as parquet files',
@@ -68,28 +69,47 @@ def hello_world():
               type=click.BOOL, is_flag=True, default=False)
 @click.command()
 def dumpdb(dburl, schema, tblname, parquet, sqlite, feather, csv, tsv):
+    dburl = sa.engine.url.make_url(dburl)
+    passwd = os.environ.get('DB_PASSWORD', False)
+    if passwd:
+        dburl.password = passwd
+    logger.info(
+        'connecting to {host:"%s", port:%s, db:"%s", schema:"%s", table: "%s", driver:"%s"}' % 
+        (dburl.host, dburl.port, dburl.database, schema, tblname, dburl.drivername))
     md = sa.MetaData(dburl, schema=schema)
     db = bz.data(md)
-    odbname = schema if schema else dburl.split('/')[-1]
-    if odbname == '' or odbname is None:
-        odbname = 'dump'
+    odbname = schema if schema is not None else dburl.database
     if not os.path.exists(odbname):
         os.makedirs(odbname)
-    for tbl in db.data.tables.keys():
+    otbls = list(db.data.tables.keys())
+    logger.info('found the following tables in db: ' + str(otbls))
+    ngin = None
+    if not (sqlite or csv or tsv or parquet or feather):
+        sqlite = True
+    if sqlite:
+        sadburl = 'sqlite:///%s.sqlite3.db' % odbname
+        ngin = sa.create_engine(sadburl)
+    if tblname:
+        otbls = [tblname]
+    for tbln in otbls:
+        if tbln.startswith(schema):
+            tbln = tbln.split('.')[1]
+        tbl = db[tbln]
+        logger.info('processing {table:%s, rows:%d,  schema:%s' % (tbln, tbl.nrows, tbl.schema))
+        ofpfx = '%s/%s.' % (odbname, tbln)
+        df = odo(tbl, pd.DataFrame)
         if sqlite:
-            sadburl = 'sqlite://%s.sqlite3.db::%s' % (odbname, tblname)
-            odo(tbl, sadburl)
+             df.to_sql(tbln, ngin)
         if csv:
-            odo(tbl, '%s/%s.csv')
+            odo(tbl, '%s.csv' % (ofpfx))
         if tsv:
-            odo(tbl, '%s/%s.tsv')
-        if parquet or feather:
-            df = odo(tbl, pd.DataFrame)
-            if parquet:
-                df.to_parquet('%s/%s.parquet' % (odbname, tblname))
-            if feather:
-                import feather as ft
-                feather.write_dataframe('%s/%s.feather' % (odbname, tblname))
+            odo(tbl, '%s.tsv' % (ofpfx))
+        if parquet:
+            import fastparquet
+            df.to_parquet('%s.parquet' % (ofpfx))
+        if feather:
+            import feather as ft
+            feather.write_dataframe('%s.feather' % (ofpfx))
 
 
 cli.add_command(hello_world)
